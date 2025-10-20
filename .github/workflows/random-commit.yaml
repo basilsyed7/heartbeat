@@ -1,0 +1,85 @@
+name: Random Daily Commit
+
+on:
+  schedule:
+    # DAILY at 15:13 UTC. Change this to your preferred time.
+    # Note: GitHub Actions CRON is UTC, not your local time.
+    - cron: "13 15 * * *"
+  workflow_dispatch:
+
+jobs:
+  poke-a-repo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Configure git identity
+        run: |
+          git config --global user.name "your-github-username"
+          git config --global user.email "your-email@users.noreply.github.com"
+
+      - name: Install GitHub CLI + jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh jq
+
+      - name: Authenticate GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: gh auth setup-git
+
+      - name: Pick a random repo you own (not forked/archived)
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          # List repos you own with push permission
+          REPOS_JSON=$(gh api -H "Accept: application/vnd.github+json" \
+            '/user/repos?per_page=100&affiliation=owner')
+          echo "$REPOS_JSON" | jq -r '
+            .[] | select(.fork==false and .archived==false and .disabled==false and .permissions.push==true) | .full_name
+          ' > repos.txt
+
+          # OPTIONAL: allowlist specific repos only (uncomment + edit)
+          # grep -E '^(youruser/repo1|youruser/repo2|youruser/repo3)$' -i repos.txt > allow.txt && mv allow.txt repos.txt
+
+          if [ ! -s repos.txt ]; then
+            echo "No eligible repos found." >&2
+            exit 1
+          fi
+
+          COUNT=$(wc -l < repos.txt)
+          INDEX=$(( (RANDOM % COUNT) + 1 ))
+          TARGET=$(sed -n "${INDEX}p" repos.txt)
+
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+
+      - name: Clone target repo
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          git clone "https://x-access-token:${GH_PAT}@github.com/${{ steps.pick.outputs.target }}.git" target-repo
+          cd target-repo
+          echo "Cloned ${{ steps.pick.outputs.target }}"
+
+      - name: Make a minimal, traceable change
+        run: |
+          cd target-repo
+          mkdir -p .github
+          FILE=".github/heartbeat.md"
+          echo "$(date -u +'%Y-%m-%d %H:%M:%S UTC') — automated heartbeat" >> "$FILE"
+
+          git add .
+          git commit -m "chore: automated heartbeat ($(date -u +'%Y-%m-%d'))" || echo "Nothing to commit."
+
+      - name: Push (if a commit exists)
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          cd target-repo
+          if git log -1 --pretty=%B | grep -q 'automated heartbeat'; then
+            git push origin HEAD
+            echo "Pushed to ${{ steps.pick.outputs.target }}"
+          else
+            echo "No changes detected; skipping push."
+          fi
