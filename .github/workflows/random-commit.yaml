@@ -1,4 +1,4 @@
-name: Random Daily Commit
+name: Daily Heartbeat Commit
 
 on:
   schedule:
@@ -6,82 +6,45 @@ on:
     - cron: "13 15 * * *"
   workflow_dispatch:
 
+# Let this workflow push to THIS repo using the built-in GITHUB_TOKEN.
+permissions:
+  contents: write
+
 jobs:
-  poke-a-repo:
+  heartbeat:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+
     steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+        with:
+          # Uses GITHUB_TOKEN so we can push back to the same repo/branch.
+          persist-credentials: true
+
       - name: Configure git identity
         run: |
-          git config --global user.name "basilsyed7"
-          git config --global user.email "syedbasil@gmail.com"
+          git config user.name  "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR}@users.noreply.github.com"
 
-      - name: Install jq (for JSON parsing)
+      - name: Append heartbeat
         run: |
-          sudo apt-get update
-          sudo apt-get install -y jq
-
-      - name: Pick a random repo you own (not forked/archived)
-        id: pick
-        env:
-          GITHUB_API: https://api.github.com
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          # Fetch up to 100 repos you own (adjust per_page/pagination if you have more)
-          REPOS_JSON=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
-                             -H "Accept: application/vnd.github+json" \
-                             "$GITHUB_API/user/repos?per_page=100&affiliation=owner")
-
-          echo "$REPOS_JSON" | jq -r '
-            .[] | select(.fork==false and .archived==false and .disabled==false and .permissions.push==true) | .full_name
-          ' > repos.txt
-
-          # OPTIONAL allowlist — uncomment and list repos to constrain targets
-          # grep -E '^(youruser/repo1|youruser/repo2|youruser/repo3)$' -i repos.txt > allow.txt && mv allow.txt repos.txt
-
-          if [ ! -s repos.txt ]; then
-            echo "No eligible repos found." >&2
-            echo "target=" >> "$GITHUB_OUTPUT"
-            exit 1
-          fi
-
-          COUNT=$(wc -l < repos.txt)
-          INDEX=$(( (RANDOM % COUNT) + 1 ))
-          TARGET=$(sed -n "${INDEX}p" repos.txt)
-
-          echo "Chosen repo: $TARGET"
-          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
-
-      - name: Clone target repo
-        if: steps.pick.outputs.target != ''
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: |
-          git clone "https://x-access-token:${GH_PAT}@github.com/${{ steps.pick.outputs.target }}.git" target-repo
-          cd target-repo
-          echo "Cloned ${{ steps.pick.outputs.target }}"
-
-      - name: Make a minimal, traceable change
-        if: steps.pick.outputs.target != ''
-        run: |
-          cd target-repo
           mkdir -p .github
           FILE=".github/heartbeat.md"
           echo "$(date -u +'%Y-%m-%d %H:%M:%S UTC') — automated heartbeat" >> "$FILE"
-
-          git add .
-          git commit -m "chore: automated heartbeat ($(date -u +'%Y-%m-%d'))" || echo "Nothing to commit."
+          git add "$FILE"
+          git commit -m "chore: heartbeat [skip ci] ($(date -u +'%Y-%m-%d'))" || echo "Nothing to commit."
 
       - name: Push (if a commit exists)
-        if: steps.pick.outputs.target != ''
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
-          cd target-repo
-          if git log -1 --pretty=%B | grep -q 'automated heartbeat'; then
-            git push origin HEAD
-            echo "Pushed to ${{ steps.pick.outputs.target }}"
+          if git log -1 --pretty=%B | grep -q 'heartbeat'; then
+            # Push back to the same branch we checked out (usually default branch)
+            CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+            git push origin "$CURRENT_BRANCH"
+
+            SHA="$(git rev-parse HEAD)"
+            echo "### Repo: $GITHUB_REPOSITORY" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Branch: $CURRENT_BRANCH" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Commit: [$SHA](https://github.com/$GITHUB_REPOSITORY/commit/$SHA)" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No changes detected; skipping push."
+            echo "### No changes detected; skipping push." >> "$GITHUB_STEP_SUMMARY"
           fi
