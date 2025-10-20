@@ -2,8 +2,7 @@ name: Random Daily Commit
 
 on:
   schedule:
-    # DAILY at 15:13 UTC. Change this to your preferred time.
-    # Note: GitHub Actions CRON is UTC, not your local time.
+    # DAILY at 15:13 UTC — change to your preferred time (UTC).
     - cron: "13 15 * * *"
   workflow_dispatch:
 
@@ -15,36 +14,35 @@ jobs:
     steps:
       - name: Configure git identity
         run: |
-          git config --global user.name "your-github-username"
-          git config --global user.email "your-email@users.noreply.github.com"
+          git config --global user.name "basilsyed7"
+          git config --global user.email "syedbasil@gmail.com"
 
-      - name: Install GitHub CLI + jq
+      - name: Install jq (for JSON parsing)
         run: |
           sudo apt-get update
-          sudo apt-get install -y gh jq
-
-      - name: Authenticate GitHub CLI
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: gh auth setup-git
+          sudo apt-get install -y jq
 
       - name: Pick a random repo you own (not forked/archived)
         id: pick
         env:
+          GITHUB_API: https://api.github.com
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          # List repos you own with push permission
-          REPOS_JSON=$(gh api -H "Accept: application/vnd.github+json" \
-            '/user/repos?per_page=100&affiliation=owner')
+          # Fetch up to 100 repos you own (adjust per_page/pagination if you have more)
+          REPOS_JSON=$(curl -sS -H "Authorization: Bearer $GH_TOKEN" \
+                             -H "Accept: application/vnd.github+json" \
+                             "$GITHUB_API/user/repos?per_page=100&affiliation=owner")
+
           echo "$REPOS_JSON" | jq -r '
             .[] | select(.fork==false and .archived==false and .disabled==false and .permissions.push==true) | .full_name
           ' > repos.txt
 
-          # OPTIONAL: allowlist specific repos only (uncomment + edit)
+          # OPTIONAL allowlist — uncomment and list repos to constrain targets
           # grep -E '^(youruser/repo1|youruser/repo2|youruser/repo3)$' -i repos.txt > allow.txt && mv allow.txt repos.txt
 
           if [ ! -s repos.txt ]; then
             echo "No eligible repos found." >&2
+            echo "target=" >> "$GITHUB_OUTPUT"
             exit 1
           fi
 
@@ -52,9 +50,11 @@ jobs:
           INDEX=$(( (RANDOM % COUNT) + 1 ))
           TARGET=$(sed -n "${INDEX}p" repos.txt)
 
+          echo "Chosen repo: $TARGET"
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
 
       - name: Clone target repo
+        if: steps.pick.outputs.target != ''
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
@@ -63,6 +63,7 @@ jobs:
           echo "Cloned ${{ steps.pick.outputs.target }}"
 
       - name: Make a minimal, traceable change
+        if: steps.pick.outputs.target != ''
         run: |
           cd target-repo
           mkdir -p .github
@@ -73,6 +74,7 @@ jobs:
           git commit -m "chore: automated heartbeat ($(date -u +'%Y-%m-%d'))" || echo "Nothing to commit."
 
       - name: Push (if a commit exists)
+        if: steps.pick.outputs.target != ''
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
